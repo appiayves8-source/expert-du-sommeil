@@ -15,11 +15,32 @@ const CONFIG = {
     nom: 'Expert du Sommeil',
     slogan: 'Le savoir\u2011faire marocain au service de votre confort',
     description: 'Matelas haut de gamme et accessoires pour la maison. Qualité marocaine, livrés en Côte d\u2019Ivoire.',
-    whatsapp: '2250000000000',        // Numéro avec indicatif pays, sans «\u202F+\u202F» ni espaces
     adresse: 'Abidjan, Côte d\u2019Ivoire',  // Adresse complète
-    horaires: 'Lundi \u2013 Samedi : 8\u202Fh \u2013 19\u202Fh',
+    horaires: 'Lundi \u2013 Samedi : 08\u202Fh\u202F30 \u2013 18\u202Fh\u202F30 (Fermé le dimanche)',
     email: 'contact@expertdusommeil.ci',
     siteUrl: 'https://expertdusommeil.ci',
+  },
+
+  /* ─── Numéros WhatsApp & Répartition des conseillers ──────── */
+  // Pour chaque conseiller :
+  // • numero : indicatif 225, sans le « + », sans espaces ni tirets
+  // • nom    : prénom ou identifiant du conseiller
+  // • actif  : true (reçoit des commandes) ou false (en pause / congé)
+  // • poids  : probabilité relative (1 par défaut, 2 = deux fois plus de commandes, etc.)
+  whatsappConseillers: [
+    { numero: '2250700000001', nom: 'Awa', actif: true, poids: 1 },
+    { numero: '2250700000002', nom: 'Kouamé', actif: true, poids: 1 },
+    { numero: '2250700000003', nom: 'Fatou', actif: true, poids: 1 },
+  ],
+
+  /* ─── Horaires de service WhatsApp (heure d'Abidjan) ───────── */
+  horairesService: {
+    fuseau: 'Africa/Abidjan', // Toujours calculé dans ce fuseau
+    // Jours d'ouverture : 1 (Lundi) à 6 (Samedi). 0 (Dimanche) est fermé.
+    joursOuverture: [1, 2, 3, 4, 5, 6],
+    heureOuverture: '08:30',  // Format 24h 'HH:mm'
+    heureFermeture: '18:30',  // Format 24h 'HH:mm'
+    dureeRetentionHeures: 24, // Mémorise le même conseiller pour un visiteur pendant 24h
   },
 
   /* ─── Kits de matelas (Offre Spéciale affiche & Gamme Ph) ── */

@@ -66,6 +66,9 @@
 
       <div class="header__actions">
         <a href="#produits" class="btn btn--accent btn--sm header__cta">Nos kits</a>
+        <button type="button" id="header-wa-btn" class="btn btn--whatsapp btn--sm header__wa-btn" aria-label="Commander sur WhatsApp">
+          💬 Commander
+        </button>
         <button id="burger" class="burger"
                 aria-label="Ouvrir le menu" aria-expanded="false"
                 aria-controls="mobile-nav" type="button">
@@ -87,6 +90,11 @@
         <li><a href="#temoignages" class="mobile-nav__link">Témoignages</a></li>
         <li><a href="#livraison" class="mobile-nav__link">Livraison</a></li>
         <li><a href="#contact" class="mobile-nav__link">Contact</a></li>
+        <li style="margin-top: var(--s4);">
+          <button type="button" id="mobile-wa-btn" class="btn btn--whatsapp btn--sm" aria-label="Commander sur WhatsApp">
+            💬 Commander sur WhatsApp
+          </button>
+        </li>
       </ul>
     </nav>
   </div>
@@ -143,11 +151,14 @@
         </div>
 
         <div class="hero__cta-group">
-          <a id="hero-wa-btn" href="#" class="btn btn--whatsapp"
-             target="_blank" rel="noopener noreferrer"
+          <button type="button" id="hero-wa-btn" class="btn btn--whatsapp"
              aria-label="Commander l'Offre Spéciale sur WhatsApp">
             💬 Commander l'Offre Spéciale (52.900 FCFA)
-          </a>
+          </button>
+          <div class="wa-closed-notice wa-closed-notice--hero" id="hero-wa-closed" role="status">
+            <span class="wa-closed-notice__icon">🕒</span>
+            <span class="wa-closed-notice__text">Nos conseillers sont fermés.</span>
+          </div>
           <a id="hero-products-btn" href="#produits" class="btn btn--outline"
              aria-label="Voir tous nos packs et articles seuls">
             Découvrir les kits ↓
@@ -294,13 +305,16 @@
             <div class="contact-block__icon" aria-hidden="true">💬</div>
             <h3 class="contact-block__title">WhatsApp</h3>
             <p class="contact-block__text">Le moyen le plus rapide de nous joindre.</p>
-            <a id="contact-wa-btn" href="#"
+            <button type="button" id="contact-wa-btn"
                class="btn btn--whatsapp btn--sm"
-               target="_blank" rel="noopener noreferrer"
                style="margin-top: var(--s3)"
                aria-label="Écrire sur WhatsApp">
               Écrire sur WhatsApp
-            </a>
+            </button>
+            <div class="wa-closed-notice wa-closed-notice--card" id="contact-wa-closed" style="margin-top: var(--s3);" role="status">
+              <span class="wa-closed-notice__icon">🕒</span>
+              <span class="wa-closed-notice__text">Nos conseillers sont fermés.</span>
+            </div>
           </div>
 
           <div class="contact-block reveal">
@@ -363,11 +377,10 @@
   <!-- ═══════════════════════════════════════════════════════
        FLOATING WHATSAPP
        ═══════════════════════════════════════════════════════ -->
-  <a id="fab-wa" href="#" class="fab-whatsapp"
-     target="_blank" rel="noopener noreferrer"
+  <button type="button" id="fab-wa" class="fab-whatsapp"
      aria-label="Nous contacter sur WhatsApp">
     💬
-  </a>
+  </button>
 
   <!-- ═══════════════════════════════════════════════════════
        SCRIPTS

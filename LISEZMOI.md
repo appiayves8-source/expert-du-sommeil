@@ -8,15 +8,84 @@ Site vitrine statique pour **Expert du Sommeil**, entreprise marocaine installé
 
 Toutes les informations du site se trouvent dans **un seul fichier** : `config.js`. Ouvrez-le avec un éditeur de texte (Bloc-notes, VS Code, Notepad++…) et modifiez les valeurs.
 
-### Changer le numéro WhatsApp
+### Gérer les conseillers WhatsApp (Répartition automatique)
 
-Cherchez la ligne `whatsapp:` et remplacez le numéro :
+Dans `config.js`, cherchez la section `whatsappConseillers :`
 
 ```javascript
-whatsapp: '2250700000000',   // votre numéro avec indicatif pays
+whatsappConseillers: [
+  { numero: '2250700000001', nom: 'Awa', actif: true, poids: 1 },
+  { numero: '2250700000002', nom: 'Kouamé', actif: true, poids: 1 },
+  { numero: '2250700000003', nom: 'Fatou', actif: true, poids: 1 },
+],
 ```
 
-> ⚠️ Le numéro doit commencer par l'indicatif pays (225 pour la Côte d'Ivoire), **sans** le signe `+`, **sans** espaces ni tirets.
+- **Ajouter un conseiller** : Ajoutez simplement une nouvelle ligne dans la liste, par exemple :
+  ```javascript
+  { numero: '2250711223344', nom: 'Ibrahim', actif: true, poids: 1 },
+  ```
+  > ⚠️ Le numéro doit toujours commencer par `225` (indicatif de la Côte d'Ivoire), **sans** le signe `+`, **sans** espaces ni tirets.
+
+- **Retirer un conseiller** : Supprimez la ligne correspondante dans la liste.
+
+- **Désactiver temporairement un conseiller** (en congé, en pause ou indisponible) :
+  Changez simplement `actif: true` en `actif: false`. Le conseiller ne recevra plus aucun clic sans avoir besoin de supprimer son numéro :
+  ```javascript
+  { numero: '2250700000001', nom: 'Awa', actif: false, poids: 1 }, // Awa est en pause
+  ```
+
+- **Ajuster la répartition (le poids)** :
+  Le champ `poids` permet de donner plus ou moins de clients à un conseiller :
+  - Si tous les conseillers ont `poids: 1`, ils reçoivent chacun le même nombre de demandes en moyenne (ex. 33 % chacun pour 3 conseillers).
+  - Si un conseiller a `poids: 2` et les autres `poids: 1`, il recevra deux fois plus de clients que les autres.
+
+- **Mémorisation 24 heures** :
+  Lorsqu'un visiteur clique sur un bouton pour la première fois, un conseiller lui est attribué au hasard. Pendant **24 heures**, ce visiteur sera toujours redirigé vers ce même conseiller pour garder la continuité de ses échanges. Passé 24h ou si ce conseiller est désactivé, un nouveau tirage a lieu.
+
+---
+
+### Changer les horaires et les jours d'ouverture
+
+Dans `config.js`, cherchez la section `horairesService :`
+
+```javascript
+horairesService: {
+  fuseau: 'Africa/Abidjan', // Calcule toujours l'heure réelle d'Abidjan
+  joursOuverture: [1, 2, 3, 4, 5, 6], // 1=Lundi à 6=Samedi (0=Dimanche fermé)
+  heureOuverture: '08:30', // Format 24h
+  heureFermeture: '18:30', // Format 24h
+  dureeRetentionHeures: 24,
+},
+```
+
+- **Changer les heures d'ouverture et de fermeture** :
+  Modifiez `'08:30'` ou `'18:30'` en respectant le format `'HH:mm'` (sur 24 heures). Par exemple `'08:00'` et `'19:00'`.
+- **Changer les jours d'ouverture** :
+  Les chiffres représentent les jours de la semaine :
+  - `0` = Dimanche
+  - `1` = Lundi
+  - `2` = Mardi
+  - `3` = Mercredi
+  - `4` = Jeudi
+  - `5` = Vendredi
+  - `6` = Samedi  
+  *Exemple pour ouvrir uniquement du lundi au vendredi* : `joursOuverture: [1, 2, 3, 4, 5]`
+- **Comportement automatique en dehors des horaires** :
+  Dès 18 h 30 (ou le dimanche), **tous les boutons WhatsApp disparaissent automatiquement** du site et sont remplacés par un message discret indiquant la prochaine reprise (par exemple : *« Nos conseillers sont fermés. Ils reprennent le lundi à 08 h 30. »*).
+  Le site vérifie l'heure toutes les minutes en tâche de fond sans recharger la page.
+
+---
+
+### Vérifier la répartition des clics (Statistiques)
+
+Vous pouvez à tout moment vérifier combien de clics chaque conseiller a reçus :
+1. Ouvrez votre site dans votre navigateur (Chrome, Edge, Safari, Firefox).
+2. Appuyez sur la touche `F12` de votre clavier (ou clic-droit > *Inspecter*), puis allez dans l'onglet **Console**.
+3. Tapez la commande suivante et appuyez sur **Entrée** :
+   ```javascript
+   getWhatsAppStats()
+   ```
+4. Un tableau récapitulatif s'affiche immédiatement avec le nom de chaque conseiller et son total de clics enregistrés !
 
 ### Changer les prix (Kits complets & Matelas seuls)
 

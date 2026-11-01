@@ -23,19 +23,308 @@
   localStorage.setItem('eds-theme', 'dark');
 
   // ═══════════════════════════════════════════════════════════
-  //  2. WHATSAPP HELPERS
+  //  2. SYSTÈME WHATSAPP : HORAIRES D'ABIDJAN & RÉPARTITION
   // ═══════════════════════════════════════════════════════════
-  function waLink(message) {
-    const num = CONFIG.boutique.whatsapp;
-    return 'https://wa.me/' + num + '?text=' + encodeURIComponent(message);
+
+  const STORAGE_KEY_COUNSELOR = 'eds_wa_counselor';
+  const STORAGE_KEY_STATS = 'eds_wa_stats';
+
+  /**
+   * Calcule précisément l'heure dans le fuseau Africa/Abidjan (UTC+0, sans heure d'été).
+   */
+  function getAbidjanTime() {
+    try {
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: (CONFIG.horairesService && CONFIG.horairesService.fuseau) || 'Africa/Abidjan',
+        weekday: 'short',
+        hour: 'numeric',
+        minute: 'numeric',
+        second: 'numeric',
+        hour12: false,
+      });
+      const parts = formatter.formatToParts(new Date());
+      const p = {};
+      for (let i = 0; i < parts.length; i++) {
+        p[parts[i].type] = parts[i].value;
+      }
+      const weekdayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+      const day = weekdayMap[p.weekday];
+      if (day !== undefined && p.hour !== undefined) {
+        const hour = parseInt(p.hour, 10) % 24;
+        const minute = parseInt(p.minute, 10);
+        return {
+          day: day, // 0 = Dimanche, 1 = Lundi, ..., 6 = Samedi
+          hour: hour,
+          minute: minute,
+          totalMinutes: hour * 60 + minute,
+        };
+      }
+    } catch (e) {
+      // Fallback UTC si Intl échoue (Abidjan = UTC+0)
+    }
+
+    const now = new Date();
+    const day = now.getUTCDay();
+    const hour = now.getUTCHours();
+    const minute = now.getUTCMinutes();
+    return {
+      day: day,
+      hour: hour,
+      minute: minute,
+      totalMinutes: hour * 60 + minute,
+    };
   }
 
-  function waProductLink(nom, prix) {
-    return waLink(CONFIG.whatsappMessage(nom, prix));
+  /**
+   * Vérifie si le service WhatsApp est actuellement ouvert à Abidjan.
+   */
+  function isWhatsAppServiceOpen(abidjanTime) {
+    const cfg = CONFIG.horairesService;
+    if (!cfg) return true;
+
+    const joursOuverts = Array.isArray(cfg.joursOuverture) ? cfg.joursOuverture : [1, 2, 3, 4, 5, 6];
+    if (!joursOuverts.includes(abidjanTime.day)) {
+      return false;
+    }
+
+    const openParts = (cfg.heureOuverture || '08:30').split(':').map(Number);
+    const closeParts = (cfg.heureFermeture || '18:30').split(':').map(Number);
+    const openMinutes = openParts[0] * 60 + (openParts[1] || 0);
+    const closeMinutes = closeParts[0] * 60 + (closeParts[1] || 0);
+
+    return abidjanTime.totalMinutes >= openMinutes && abidjanTime.totalMinutes < closeMinutes;
   }
 
-  function waGeneralLink() {
-    return waLink(CONFIG.whatsappMessageGeneral);
+  /**
+   * Calcule le prochain jour et heure de reprise des conseillers.
+   */
+  function getNextOpeningInfo(abidjanTime) {
+    const cfg = CONFIG.horairesService || {};
+    const joursOuverts = Array.isArray(cfg.joursOuverture) ? cfg.joursOuverture : [1, 2, 3, 4, 5, 6];
+    const heureOuvStr = cfg.heureOuverture || '08:30';
+    const openParts = heureOuvStr.split(':').map(Number);
+    const openMinutes = openParts[0] * 60 + (openParts[1] || 0);
+
+    const joursNoms = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
+    const heureAffichee = heureOuvStr.replace(':', ' h ');
+
+    // 1. Si aujourd'hui est un jour d'ouverture mais avant l'heure d'ouverture du matin
+    if (joursOuverts.includes(abidjanTime.day) && abidjanTime.totalMinutes < openMinutes) {
+      return { jourNom: joursNoms[abidjanTime.day], heure: heureAffichee };
+    }
+
+    // 2. Chercher dans les 7 jours suivants le prochain jour ouvré
+    for (let offset = 1; offset <= 7; offset++) {
+      const nextDay = (abidjanTime.day + offset) % 7;
+      if (joursOuverts.includes(nextDay)) {
+        return { jourNom: joursNoms[nextDay], heure: heureAffichee };
+      }
+    }
+
+    return { jourNom: 'lundi', heure: heureAffichee };
+  }
+
+  /**
+   * Génère le message exact de fermeture :
+   * « Nos conseillers sont fermés. Ils reprennent le [jour] à 08 h 30. »
+   */
+  function getNextOpeningMessage(abidjanTime) {
+    const info = getNextOpeningInfo(abidjanTime);
+    const template = (CONFIG.horairesService && CONFIG.horairesService.messageFermeture) ||
+      'Nos conseillers sont fermés. Ils reprennent le {jour} à {heure}.';
+    return template.replace('{jour}', info.jourNom).replace('{heure}', info.heure);
+  }
+
+  /**
+   * Sélectionne un conseiller avec mémoire 24h (localStorage) ou tirage aléatoire pondéré.
+   */
+  function getAssignedCounselor() {
+    const conseillers = CONFIG.whatsappConseillers || [];
+    const actifs = conseillers.filter((c) => c && c.actif && c.numero);
+
+    if (actifs.length === 0) {
+      return {
+        numero: (CONFIG.boutique && CONFIG.boutique.whatsapp) || '2250700000001',
+        nom: 'Conseiller',
+        actif: true,
+        poids: 1,
+      };
+    }
+
+    // 1. Vérifier si un conseiller valide est déjà mémorisé depuis moins de 24h
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_COUNSELOR);
+      if (raw) {
+        const saved = JSON.parse(raw);
+        const retentionHours = (CONFIG.horairesService && CONFIG.horairesService.dureeRetentionHeures) || 24;
+        const maxAgeMs = retentionHours * 3600 * 1000;
+        const age = Date.now() - (saved.timestamp || 0);
+
+        if (age >= 0 && age < maxAgeMs) {
+          const matched = actifs.find((c) => String(c.numero).trim() === String(saved.numero).trim());
+          if (matched) {
+            return matched;
+          }
+        }
+      }
+    } catch (e) {
+      // Ignore les erreurs de lecture localStorage
+    }
+
+    // 2. Tirage au sort aléatoire pondéré selon le poids de chaque conseiller
+    const totalWeight = actifs.reduce((sum, c) => sum + Math.max(1, Number(c.poids) || 1), 0);
+    let threshold = Math.random() * totalWeight;
+    let chosen = actifs[0];
+
+    for (let i = 0; i < actifs.length; i++) {
+      const c = actifs[i];
+      const w = Math.max(1, Number(c.poids) || 1);
+      if (threshold < w) {
+        chosen = c;
+        break;
+      }
+      threshold -= w;
+    }
+
+    // 3. Mémoriser le conseiller pour 24h
+    try {
+      localStorage.setItem(STORAGE_KEY_COUNSELOR, JSON.stringify({
+        numero: chosen.numero,
+        nom: chosen.nom,
+        timestamp: Date.now(),
+      }));
+    } catch (e) {
+      // Ignore les erreurs d'écriture localStorage
+    }
+
+    return chosen;
+  }
+
+  /**
+   * Envoie un événement de statistiques pour suivre la répartition des conseillers.
+   */
+  function trackWhatsAppClick(conseiller, productInfo) {
+    const eventData = {
+      event: 'whatsapp_click',
+      conseiller_nom: conseiller.nom,
+      conseiller_numero: conseiller.numero,
+      produit: productInfo || 'Général',
+      timestamp: new Date().toISOString(),
+    };
+
+    // GTM / dataLayer
+    if (window.dataLayer && Array.isArray(window.dataLayer)) {
+      window.dataLayer.push(eventData);
+    }
+
+    // Google Analytics (gtag)
+    if (typeof window.gtag === 'function') {
+      window.gtag('event', 'whatsapp_click', {
+        conseiller: conseiller.nom,
+        produit: productInfo || 'Général',
+      });
+    }
+
+    // Custom DOM Event
+    try {
+      window.dispatchEvent(new CustomEvent('eds:whatsapp_click', { detail: eventData }));
+    } catch (e) {}
+
+    // Statistiques locales vérifiables directement dans la console
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_STATS);
+      const stats = raw ? JSON.parse(raw) : { total: 0, conseillers: {}, clics: [] };
+      stats.total = (stats.total || 0) + 1;
+      stats.conseillers[conseiller.nom] = (stats.conseillers[conseiller.nom] || 0) + 1;
+      if (!Array.isArray(stats.clics)) stats.clics = [];
+      stats.clics.unshift({
+        conseiller: conseiller.nom,
+        produit: productInfo || 'Général',
+        date: new Date().toLocaleTimeString('fr-FR'),
+      });
+      if (stats.clics.length > 50) stats.clics.pop();
+      localStorage.setItem(STORAGE_KEY_STATS, JSON.stringify(stats));
+    } catch (e) {}
+
+    console.info('📊 [Expert du Sommeil - WhatsApp] Clic attribué à :', conseiller.nom, '| Produit :', productInfo || 'Général');
+  }
+
+  /**
+   * Fonction globale de consultation des statistiques de répartition (accessible dans la console).
+   */
+  window.getWhatsAppStats = function () {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_STATS);
+      if (!raw) {
+        console.log('ℹ️ Aucun clic WhatsApp enregistré pour le moment.');
+        return null;
+      }
+      const stats = JSON.parse(raw);
+      console.log('📈 Total de clics WhatsApp :', stats.total);
+      console.table(stats.conseillers);
+      return stats;
+    } catch (e) {
+      console.error('Erreur lecture stats :', e);
+      return null;
+    }
+  };
+
+  /**
+   * Ouvre la conversation WhatsApp avec le conseiller sélectionné et le message préparé.
+   */
+  function openWhatsAppOrder(productName, price) {
+    const abidjanTime = getAbidjanTime();
+    if (!isWhatsAppServiceOpen(abidjanTime)) {
+      alert(getNextOpeningMessage(abidjanTime));
+      updateWhatsAppUI();
+      return;
+    }
+
+    let message;
+    if (productName && price) {
+      message = CONFIG.whatsappMessage(productName, price);
+    } else if (productName) {
+      message = `Bonjour Expert du Sommeil ! 👋\nJe souhaite commander : *${productName}*.`;
+    } else {
+      message = CONFIG.whatsappMessageGeneral;
+    }
+
+    const conseiller = getAssignedCounselor();
+    trackWhatsAppClick(conseiller, productName || 'Général');
+
+    const url = 'https://wa.me/' + conseiller.numero + '?text=' + encodeURIComponent(message);
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+
+  /**
+   * Met à jour l'état de l'interface (boutons visibles vs messages discrets de fermeture).
+   */
+  function updateWhatsAppUI() {
+    const abidjanTime = getAbidjanTime();
+    const isOpen = isWhatsAppServiceOpen(abidjanTime);
+
+    if (isOpen) {
+      document.body.classList.remove('wa-service--closed');
+      document.body.classList.add('wa-service--open');
+    } else {
+      document.body.classList.remove('wa-service--open');
+      document.body.classList.add('wa-service--closed');
+
+      const message = getNextOpeningMessage(abidjanTime);
+      document.querySelectorAll('.wa-closed-notice__text').forEach((el) => {
+        el.textContent = message;
+      });
+    }
+  }
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   // ═══════════════════════════════════════════════════════════
@@ -47,23 +336,57 @@
 
     // ── Hero ───────────────────────────────────────────────
     setText('hero-title-name', CONFIG.boutique.nom);
-    setAttr('hero-wa-btn', 'href', waGeneralLink());
     setAttr('hero-products-btn', 'href', '#produits');
-
-    // ── Floating WhatsApp ──────────────────────────────────
-    setAttr('fab-wa', 'href', waGeneralLink());
 
     // ── Kits ───────────────────────────────────────────────
     const kitsGrid = document.getElementById('kits-grid');
     if (kitsGrid) {
       kitsGrid.innerHTML = CONFIG.kits.map((kit) => kitCardHTML(kit)).join('');
       initKitSwitchers();
+
+      // Gestionnaire de clics WhatsApp pour les packs et éléments détachés
+      kitsGrid.addEventListener('click', (e) => {
+        const orderBtn = e.target.closest('.kit-order-btn');
+        if (orderBtn) {
+          const kitId = orderBtn.dataset.kitId;
+          const kit = (CONFIG.kits || []).find((k) => k.id === kitId);
+          if (kit) {
+            const isSolo = orderBtn.dataset.mode === 'solo';
+            const nom = isSolo
+              ? (kit.nomMatelasSeul || kit.nom + ' (matelas seul)')
+              : kit.nom;
+            const prixVal = isSolo
+              ? (kit.prixMatelasSeul || Math.round(kit.prix * 0.7))
+              : kit.prix;
+            openWhatsAppOrder(nom, CONFIG.formatPrix(prixVal));
+          }
+          return;
+        }
+
+        const buyBtn = e.target.closest('.kit-item__buy-btn');
+        if (buyBtn) {
+          const nom = buyBtn.dataset.itemNom;
+          const kitNom = buyBtn.dataset.itemKit;
+          const prix = buyBtn.dataset.itemPrix;
+          openWhatsAppOrder(nom + (kitNom ? ' (' + kitNom + ')' : ''), prix);
+        }
+      });
     }
 
     // ── Accessoires ────────────────────────────────────────
     const accGrid = document.getElementById('acc-grid');
     if (accGrid) {
       accGrid.innerHTML = CONFIG.accessoires.map((a) => accCardHTML(a)).join('');
+
+      // Gestionnaire de clics WhatsApp pour les accessoires
+      accGrid.addEventListener('click', (e) => {
+        const orderBtn = e.target.closest('.acc-order-btn');
+        if (orderBtn) {
+          const nom = orderBtn.dataset.accNom;
+          const prix = orderBtn.dataset.accPrix;
+          openWhatsAppOrder(nom, prix);
+        }
+      });
     }
 
     // ── Entreprise ─────────────────────────────────────────
@@ -92,7 +415,6 @@
     setText('livraison-note', CONFIG.livraison.note);
 
     // ── Contact ────────────────────────────────────────────
-    setAttr('contact-wa-btn', 'href', waGeneralLink());
     setText('contact-adresse', CONFIG.boutique.adresse);
     setText('contact-horaires', CONFIG.boutique.horaires);
     setText('contact-email', CONFIG.boutique.email);
@@ -109,6 +431,49 @@
       tGrid.innerHTML = CONFIG.temoignages.avis.map((t) => testimonialCardHTML(t)).join('');
     }
     initCounterAnimation();
+
+    // ── Écouteurs de clics des boutons WhatsApp statiques ───
+    const heroWaBtn = document.getElementById('hero-wa-btn');
+    if (heroWaBtn) {
+      heroWaBtn.addEventListener('click', () => {
+        openWhatsAppOrder('Pack Offre Spéciale (Matelas Ph 8 + 2 Coussins + Ventilateur sur pied)', '52.900 FCFA');
+      });
+    }
+
+    const headerWaBtn = document.getElementById('header-wa-btn');
+    if (headerWaBtn) {
+      headerWaBtn.addEventListener('click', () => {
+        openWhatsAppOrder(null, null);
+      });
+    }
+
+    const mobileWaBtn = document.getElementById('mobile-wa-btn');
+    if (mobileWaBtn) {
+      mobileWaBtn.addEventListener('click', () => {
+        openWhatsAppOrder(null, null);
+      });
+    }
+
+    const contactWaBtn = document.getElementById('contact-wa-btn');
+    if (contactWaBtn) {
+      contactWaBtn.addEventListener('click', () => {
+        openWhatsAppOrder(null, null);
+      });
+    }
+
+    const fabWa = document.getElementById('fab-wa');
+    if (fabWa) {
+      fabWa.addEventListener('click', () => {
+        openWhatsAppOrder(null, null);
+      });
+    }
+
+    // ── Vérification périodique des horaires de service ────
+    updateWhatsAppUI();
+    setInterval(updateWhatsAppUI, 60000); // Vérification automatique chaque minute
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) updateWhatsAppUI();
+    });
 
     // ── Init 3D ────────────────────────────────────────────
     if (typeof SceneManager !== 'undefined') {
@@ -138,9 +503,6 @@
   function kitCardHTML(kit) {
     const prixKit = CONFIG.formatPrix(kit.prix);
     const prixSolo = CONFIG.formatPrix(kit.prixMatelasSeul || Math.round(kit.prix * 0.7));
-    const nomSolo = kit.nomMatelasSeul || (kit.nom.replace('Kit', 'Matelas') + ' (seul)');
-    const linkKit = waProductLink(kit.nom + ' (pack complet)', prixKit);
-    const linkSolo = waProductLink(nomSolo, prixSolo);
 
     // Contenu détaillé avec possibilité d'achat à l'unité détaché
     const contenuItems = (kit.contenu || []).map((item) => {
@@ -148,7 +510,6 @@
         return `<li class="kit-item"><span class="kit-item__name"><span class="check-icon">✓</span> ${item}</span></li>`;
       }
       const itemPrix = item.prixSeul ? CONFIG.formatPrix(item.prixSeul) : '';
-      const itemLink = item.prixSeul ? waProductLink(item.nom + ' (' + kit.nom + ')', itemPrix) : '';
       const isPrincipal = item.principal ? 'kit-item--primary' : '';
       return `
         <li class="kit-item ${isPrincipal}">
@@ -156,13 +517,17 @@
           ${item.prixSeul ? `
             <div class="kit-item__detached">
               <span class="kit-item__price">${itemPrix}</span>
-              <a href="${itemLink}"
+              <button type="button"
                  class="kit-item__buy-btn"
-                 target="_blank"
-                 rel="noopener noreferrer"
-                 title="Commander uniquement cet article">
+                 data-item-nom="${escapeHtml(item.nom)}"
+                 data-item-kit="${escapeHtml(kit.nom)}"
+                 data-item-prix="${escapeHtml(itemPrix)}"
+                 title="Commander uniquement cet article sur WhatsApp">
                 Acheter seul →
-              </a>
+              </button>
+              <span class="wa-closed-notice wa-closed-notice--sm" role="status" title="Conseillers fermés">
+                Fermé
+              </span>
             </div>
           ` : ''}
         </li>
@@ -246,16 +611,18 @@
               ${prixKit}
             </span>
           </div>
-          <a href="${linkKit}"
+          <button type="button"
              id="wa-cta-${kit.id}"
-             data-link-kit="${linkKit}"
-             data-link-solo="${linkSolo}"
-             class="btn btn--whatsapp btn--sm"
-             target="_blank"
-             rel="noopener noreferrer"
+             data-kit-id="${kit.id}"
+             data-mode="kit"
+             class="btn btn--whatsapp btn--sm kit-order-btn"
              aria-label="Commander ${kit.nom} sur WhatsApp">
             💬 Commander
-          </a>
+          </button>
+          <div class="wa-closed-notice wa-closed-notice--card" role="status">
+            <span class="wa-closed-notice__icon">🕒</span>
+            <span class="wa-closed-notice__text">Nos conseillers sont fermés.</span>
+          </div>
         </div>
       </div>
     </article>`;
@@ -311,7 +678,7 @@
         img.src = img.dataset.imgSolo;
       }
       if (waCta) {
-        waCta.href = waCta.dataset.linkSolo;
+        waCta.dataset.mode = 'solo';
         waCta.innerHTML = '🛏️ Commander le matelas';
       }
       card.classList.add('kit-card--solo-active');
@@ -322,7 +689,7 @@
         img.src = img.dataset.imgKit;
       }
       if (waCta) {
-        waCta.href = waCta.dataset.linkKit;
+        waCta.dataset.mode = 'kit';
         waCta.innerHTML = '💬 Commander le pack';
       }
       card.classList.remove('kit-card--solo-active');
@@ -360,13 +727,17 @@
         <p class="acc-card__desc">${acc.description}</p>
         <div class="acc-card__footer">
           <span class="acc-card__price">${prix}</span>
-          <a href="${waProductLink(acc.nom, prix)}"
-             class="btn btn--whatsapp btn--sm"
-             target="_blank"
-             rel="noopener noreferrer"
+          <button type="button"
+             class="btn btn--whatsapp btn--sm acc-order-btn"
+             data-acc-nom="${escapeHtml(acc.nom)}"
+             data-acc-prix="${escapeHtml(prix)}"
              aria-label="Commander ${acc.nom} sur WhatsApp">
             💬 Commander
-          </a>
+          </button>
+          <div class="wa-closed-notice wa-closed-notice--card" role="status">
+            <span class="wa-closed-notice__icon">🕒</span>
+            <span class="wa-closed-notice__text">Nos conseillers sont fermés.</span>
+          </div>
         </div>
       </div>
     </article>`;
