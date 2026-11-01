@@ -901,7 +901,7 @@
   //  8. SCROLL REVEAL
   // ═══════════════════════════════════════════════════════════
   function initScrollReveal() {
-    const items = document.querySelectorAll('.reveal');
+    const items = document.querySelectorAll('.reveal, .reveal-right');
     if (!items.length) return;
 
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
